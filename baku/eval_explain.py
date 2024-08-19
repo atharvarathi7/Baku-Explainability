@@ -148,8 +148,11 @@ class WorkspaceIL:
                     "grad_atten": [],
                     "grad_atten_ft":[],
                     "generic_atten_wrt_action_gradient":[],
+                    "generic_atten_wrt_action_features_gradient":[],
+                    "generic_atten":[],
                     "action_gradient_weighted_tokens":[],
                     "features_gradient_weighted_tokens":[],
+                    "atten_tokens":[],
                     "gradients_wrt_action_features":[],
                     "gradients_wrt_action":[],
                     "environment": None,
@@ -218,7 +221,7 @@ class WorkspaceIL:
                     data["gradients_wrt_action"].append(grad)
 
                     attn_map = self.agent.actor.attn_maps
-                    data["atten_maps"].append(attn_map)
+                    data["atten_maps"].append(torch.tensor(attn_map))
 
                     attn_map = torch.tensor(attn_map[-1][-1]).mean(dim=0)
                     attn_map = np.array(attn_map)
@@ -254,9 +257,10 @@ class WorkspaceIL:
             for j, blk in enumerate(step_atten):
                 cam = blk.detach()
                 cam = torch.abs(cam)
+                # A-
                 cam = cam.clamp(min=0).mean(dim=1)
-                R = R + torch.bmm(cam, R)
 
+                # R-
                 R[0]= R[0]- torch.eye(5,5).cuda()
                 sum = R[0].sum(dim=1)
                 for i in range(5):
@@ -264,6 +268,10 @@ class WorkspaceIL:
                        sum[i] = 1
                   R[0][i] = R[0][i]/sum[i]
                 R[0] =  R[0] + torch.eye(5,5).cuda()
+
+                # equation 6 
+                R = R + torch.bmm(cam, R)
+
 
             attention_relevance = R[0]/2  # batch dim
           
@@ -280,17 +288,54 @@ class WorkspaceIL:
                 cam = blk.detach()
                 cam = torch.abs(cam)
                 cam = cam.clamp(min=0).mean(dim=1)
+
+                R[0]= R[0]- torch.eye(5,5).cuda()
+                sum = R[0].sum(dim=1)
+                for i in range(5):
+                  if sum[i] == 0:
+                       sum[i] = 1
+                  R[0][i] = R[0][i]/sum[i]
+                R[0] =  R[0] + torch.eye(5,5).cuda()
+
+                R = R + torch.bmm(cam, R)
+
+            attention_relevance = R[0]/2  # batch dim
+
+            attention_relevance = attention_relevance.cpu().numpy()    
+            data["generic_atten_wrt_action_features_gradient"].append(attention_relevance) 
+            data["features_gradient_weighted_tokens"].append(attention_relevance[-1, :])  
+
+        # max_values = [t.max() for t in data["features_gradient_weighted_tokens"]]
+        # overall_max_value = max(max_values)
+
+        # for i in range(len(data["features_gradient_weighted_tokens"])):
+        #     data["features_gradient_weighted_tokens"][i] = data["features_gradient_weighted_tokens"][i]/overall_max_value
+
+        for i in range(len(data["atten_maps"])):
+            step_atten = data["atten_maps"][i]
+            R = torch.eye(5, 5).cuda()
+            R = R.unsqueeze(0).expand(1, 5, 5)
+            # check attention maps here!!
+            for j, blk in enumerate(step_atten):
+                cam = blk.detach().cuda()
+                cam = torch.abs(cam)
+                cam = cam.clamp(min=0).mean(dim=1)
+
+                # R[0]= R[0]- torch.eye(5,5).cuda()
+                # sum = R[0].sum(dim=1)
+                # for i in range(5):
+                #   if sum[i] == 0:
+                #        sum[i] = 1
+                #   R[0][i] = R[0][i]/sum[i]
+                # R[0] =  R[0] + torch.eye(5,5).cuda()
+
                 R = R + torch.bmm(cam, R)
 
             attention_relevance = R[0]  # batch dim
+            attention_relevance = attention_relevance/ attention_relevance.max()
             attention_relevance = attention_relevance.cpu().numpy()    
-            data["features_gradient_weighted_tokens"].append(attention_relevance[-1, :])  
-
-        max_values = [t.max() for t in data["features_gradient_weighted_tokens"]]
-        overall_max_value = max(max_values)
-
-        for i in range(len(data["features_gradient_weighted_tokens"])):
-            data["features_gradient_weighted_tokens"][i] = data["features_gradient_weighted_tokens"][i]/overall_max_value
+            data["generic_atten"].append(attention_relevance) 
+            data["atten_tokens"].append(attention_relevance[-1, :])  
 
         # generate pickle here
         self.store_data.save_as_pkl(filename= f"data_{self.task}.pkl", dictionary=data)
